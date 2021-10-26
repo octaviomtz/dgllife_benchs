@@ -1,6 +1,6 @@
 # dgllife_benchs
 Overview of examples found at https://github.com/awslabs/dgl-lifesci/tree/master/examples   
-
+![molecules](/images_github/molecules.png?raw=true)
 ## Use:
 1. To train a GCN on the MUV dataset using attentivefp featurizer run:
     ```bash
