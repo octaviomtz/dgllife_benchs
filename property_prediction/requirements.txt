@@ -1,0 +1,6 @@
+dgl
+rdkit-pypi
+dgllife
+hydra_core==1.1.0
+hydra==2.5
+omegaconf==2.1.0

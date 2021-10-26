@@ -1,0 +1,11 @@
+args_dataset: MUV
+args_model: GCN
+args_featurizer_type: attentivefp
+args_pretrain: False
+args_split: scaffold
+args_split_ratio: 0.8,0.1,0.1
+args_metric: roc_auc_score
+args_num_epochs: 1000
+args_num_workers: 0
+args_print_every: 20
+args_result_path: classification_results

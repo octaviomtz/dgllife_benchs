@@ -1,0 +1,5 @@
+*.ipynb
+*.log
+*.bin
+__pycache__
+classification_results
