@@ -1,4 +1,4 @@
-
+#%%
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,9 +8,17 @@ from dgllife.utils import smiles_to_bigraph, EarlyStopping, Meter
 from functools import partial
 from torch.optim import Adam
 from torch.utils.data import DataLoader
-
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from utils_load import load_dataset
+from utils import init_featurizer, mkdir_p, split_dataset, get_configure
 from utils import collate_molgraphs, load_model, predict
+from rdkit import Chem
+from rdkit.Chem import Draw
+from itertools import islice
+from pprint import pprint
 
+# %%
 def run_a_train_epoch(args, epoch, model, data_loader, loss_criterion, optimizer):
     model.train()
     train_meter = Meter()
@@ -34,7 +42,7 @@ def run_a_train_epoch(args, epoch, model, data_loader, loss_criterion, optimizer
     train_score = np.mean(train_meter.compute_metric(args['metric']))
     print('epoch {:d}/{:d}, training {} {:.4f}'.format(
         epoch + 1, args['num_epochs'], args['metric'], train_score))
-
+# %%
 def run_an_eval_epoch(args, model, data_loader):
     model.eval()
     eval_meter = Meter()
@@ -46,7 +54,9 @@ def run_an_eval_epoch(args, model, data_loader):
             eval_meter.update(logits, labels, masks)
     return np.mean(eval_meter.compute_metric(args['metric']))
 
+#%%
 def main(args, exp_config, train_set, val_set, test_set):
+    print(args)
     if args['featurizer_type'] != 'pre_train':
         exp_config['in_node_feats'] = args['node_featurizer'].feat_size()
         if args['edge_featurizer'] is not None:
@@ -107,113 +117,71 @@ def main(args, exp_config, train_set, val_set, test_set):
         f.write('Val {}: {}\n'.format(args['metric'], val_score))
         f.write('Test {}: {}\n'.format(args['metric'], test_score))
 
-if __name__ == '__main__':
-    from argparse import ArgumentParser
-
-    from utils import init_featurizer, mkdir_p, split_dataset, get_configure
-
-    parser = ArgumentParser('Multi-label Binary Classification')
-    parser.add_argument('-d', '--dataset', choices=['MUV', 'BACE', 'BBBP', 'ClinTox', 'SIDER',
-                                                    'ToxCast', 'HIV', 'PCBA', 'Tox21'],
-                        help='Dataset to use')
-    parser.add_argument('-mo', '--model', choices=['GCN', 'GAT', 'Weave', 'MPNN', 'AttentiveFP',
-                                                   'gin_supervised_contextpred',
-                                                   'gin_supervised_infomax',
-                                                   'gin_supervised_edgepred',
-                                                   'gin_supervised_masking',
-                                                   'NF'],
-                        help='Model to use')
-    parser.add_argument('-f', '--featurizer-type', choices=['canonical', 'attentivefp'],
-                        help='Featurization for atoms (and bonds). This is required for models '
-                             'other than gin_supervised_**.')
-    parser.add_argument('-p', '--pretrain', action='store_true',
-                        help='Whether to skip the training and evaluate the pre-trained model '
-                             'on the test set (default: False)')
-    parser.add_argument('-s', '--split', choices=['scaffold', 'random'], default='scaffold',
-                        help='Dataset splitting method (default: scaffold)')
-    parser.add_argument('-sr', '--split-ratio', default='0.8,0.1,0.1', type=str,
-                        help='Proportion of the dataset to use for training, validation and test, '
-                             '(default: 0.8,0.1,0.1)')
-    parser.add_argument('-me', '--metric', choices=['roc_auc_score', 'pr_auc_score'],
-                        default='roc_auc_score',
-                        help='Metric for evaluation (default: roc_auc_score)')
-    parser.add_argument('-n', '--num-epochs', type=int, default=1000,
-                        help='Maximum number of epochs for training. '
-                             'We set a large number by default as early stopping '
-                             'will be performed. (default: 1000)')
-    parser.add_argument('-nw', '--num-workers', type=int, default=0,
-                        help='Number of processes for data loading (default: 0)')
-    parser.add_argument('-pe', '--print-every', type=int, default=20,
-                        help='Print the training progress every X mini-batches')
-    parser.add_argument('-rp', '--result-path', type=str, default='classification_results',
-                        help='Path to save training results (default: classification_results)')
-    args = parser.parse_args().__dict__
-
-    if torch.cuda.is_available():
-        args['device'] = torch.device('cuda:0')
-    else:
-        args['device'] = torch.device('cpu')
-
+#%%
+def get_args():
+    args = dict()
+    args['dataset']= 'MUV'
+    args['model']= 'GCN'
+    args['featurizer_type']= 'attentivefp'
+    args['pretrain']= False
+    args['split']= 'scaffold'
+    args['split_ratio']= '0.8,0.1,0.1'
+    args['metric']= 'roc_auc_score'
+    args['num_epochs']= 1000
+    args['num_workers']= 0
+    args['print_every']= 20
+    args['result_path']= 'classification_results'
     args = init_featurizer(args)
-    mkdir_p(args['result_path'])
-    if args['dataset'] == 'MUV':
-        from dgllife.data import MUV
-        dataset = MUV(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                      node_featurizer=args['node_featurizer'],
-                      edge_featurizer=args['edge_featurizer'],
-                      n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'BACE':
-        from dgllife.data import BACE
-        dataset = BACE(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                       node_featurizer=args['node_featurizer'],
-                       edge_featurizer=args['edge_featurizer'],
-                       n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'BBBP':
-        from dgllife.data import BBBP
-        dataset = BBBP(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                       node_featurizer=args['node_featurizer'],
-                       edge_featurizer=args['edge_featurizer'],
-                       n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'ClinTox':
-        from dgllife.data import ClinTox
-        dataset = ClinTox(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                          node_featurizer=args['node_featurizer'],
-                          edge_featurizer=args['edge_featurizer'],
-                          n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'SIDER':
-        from dgllife.data import SIDER
-        dataset = SIDER(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                        node_featurizer=args['node_featurizer'],
-                        edge_featurizer=args['edge_featurizer'],
-                        n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'ToxCast':
-        from dgllife.data import ToxCast
-        dataset = ToxCast(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                          node_featurizer=args['node_featurizer'],
-                          edge_featurizer=args['edge_featurizer'],
-                          n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'HIV':
-        from dgllife.data import HIV
-        dataset = HIV(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                      node_featurizer=args['node_featurizer'],
-                      edge_featurizer=args['edge_featurizer'],
-                      n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'PCBA':
-        from dgllife.data import PCBA
-        dataset = PCBA(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                       node_featurizer=args['node_featurizer'],
-                       edge_featurizer=args['edge_featurizer'],
-                       n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    elif args['dataset'] == 'Tox21':
-        from dgllife.data import Tox21
-        dataset = Tox21(smiles_to_graph=partial(smiles_to_bigraph, add_self_loop=True),
-                        node_featurizer=args['node_featurizer'],
-                        edge_featurizer=args['edge_featurizer'],
-                        n_jobs=1 if args['num_workers'] == 0 else args['num_workers'])
-    else:
-        raise ValueError('Unexpected dataset: {}'.format(args['dataset']))
+    args['device'] = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    return args
+#%%
+args = get_args()
+dataset = load_dataset(args)                     
+args['n_tasks'] = dataset.n_tasks
+mkdir_p(args['result_path'])
+train_set, val_set, test_set = split_dataset(args, dataset)
 
-    args['n_tasks'] = dataset.n_tasks
-    train_set, val_set, test_set = split_dataset(args, dataset)
-    exp_config = get_configure(args['model'], args['featurizer_type'], args['dataset'])
-    main(args, exp_config, train_set, val_set, test_set)
+# %% OVERVIEW
+df = train_set.dataset.df
+print(f'df = {df.shape}')
+print(f'n_tasks = {dataset.n_tasks}')
+for i in df.columns[:-1]:
+    arr = df[i].values
+    print(f'{i, np.unique(arr[~np.isnan(arr)]), np.sum(arr==1)}, imbalance={np.sum(arr==1)/(np.sum(arr==1)+np.sum(arr==0)):.5f}')
+molecules = [Chem.MolFromSmiles(smiles) for smiles in islice(train_set.dataset.smiles, 6)]
+df.head()
+Draw.MolsToGridImage(molecules)
+
+# %%
+exp_config = get_configure(args['model'], args['featurizer_type'], args['dataset'])
+
+# %%
+main(args, exp_config, train_set, val_set, test_set)
+
+# %%
+model = load_model(exp_config)
+model
+
+
+
+#%%
+train_loader_temp = DataLoader(dataset=train_set, batch_size=8, shuffle=True,
+                              collate_fn=collate_molgraphs, num_workers=args['num_workers'])
+batch_data = next(iter(train_loader_temp))
+smiles, bg, labels, masks = batch_data
+
+# %%
+from pprint import pprint
+pprint(vars(bg))
+
+#%%
+batch_data = next(iter(train_loader_temp))
+smiles, bg, labels, masks = batch_data
+
+# %%
+import matplotlib.pyplot as plt
+print(bg.ndata.get('h').shape)
+plt.imshow(bg.ndata.get('h').numpy())
+# %%
+
+# %%

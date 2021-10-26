@@ -1,4 +1,4 @@
-#%%
+from typing import Dict
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,7 +10,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import hydra
 from omegaconf import DictConfig, OmegaConf
-from utils_load import load_dataset
+from utils_load import load_dataset, get_configure2
 from utils import init_featurizer, mkdir_p, split_dataset, get_configure
 from utils import collate_molgraphs, load_model, predict
 from rdkit import Chem
@@ -18,7 +18,6 @@ from rdkit.Chem import Draw
 from itertools import islice
 from pprint import pprint
 
-# %%
 def run_a_train_epoch(args, epoch, model, data_loader, loss_criterion, optimizer):
     model.train()
     train_meter = Meter()
@@ -42,7 +41,7 @@ def run_a_train_epoch(args, epoch, model, data_loader, loss_criterion, optimizer
     train_score = np.mean(train_meter.compute_metric(args['metric']))
     print('epoch {:d}/{:d}, training {} {:.4f}'.format(
         epoch + 1, args['num_epochs'], args['metric'], train_score))
-# %%
+
 def run_an_eval_epoch(args, model, data_loader):
     model.eval()
     eval_meter = Meter()
@@ -54,7 +53,6 @@ def run_an_eval_epoch(args, model, data_loader):
             eval_meter.update(logits, labels, masks)
     return np.mean(eval_meter.compute_metric(args['metric']))
 
-#%%
 def main(args, exp_config, train_set, val_set, test_set):
     print(args)
     if args['featurizer_type'] != 'pre_train':
@@ -117,71 +115,72 @@ def main(args, exp_config, train_set, val_set, test_set):
         f.write('Val {}: {}\n'.format(args['metric'], val_score))
         f.write('Test {}: {}\n'.format(args['metric'], test_score))
 
-#%%
-def get_args():
+@hydra.main(config_path="config", config_name="config.yaml")
+def main_func(cfg: DictConfig):
+    path_orig = hydra.utils.get_original_cwd()
+    print(f'path_orig = {path_orig}')
     args = dict()
-    args['dataset']= 'MUV'
-    args['model']= 'GCN'
-    args['featurizer_type']= 'canonical' #'attentivefp'
-    args['pretrain']= False
-    args['split']= 'scaffold'
-    args['split_ratio']= '0.8,0.1,0.1'
-    args['metric']= 'roc_auc_score'
-    args['num_epochs']= 1000
-    args['num_workers']= 0
-    args['print_every']= 20
-    args['result_path']= 'classification_results'
+    args['dataset']= cfg.args_dataset # 'MUV'
+    args['model']= cfg.args_model # 'GCN'
+    args['featurizer_type']= cfg.args_featurizer_type # 'attentivefp'
+    args['pretrain']= cfg.args_pretrain # False
+    args['split']= cfg.args_split # 'scaffold'
+    args['split_ratio']= cfg.args_split_ratio # '0.8,0.1,0.1'
+    args['metric']= cfg.args_metric # 'roc_auc_score'
+    args['num_epochs']= cfg.args_num_epochs # 1000
+    args['num_workers']= cfg.args_num_workers # 0
+    args['print_every']= cfg.args_print_every # 20
+    args['result_path']= cfg.args_result_path # 'classification_results'
     args = init_featurizer(args)
     args['device'] = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    return args
-#%%
-args = get_args()
-dataset = load_dataset(args)                     
-args['n_tasks'] = dataset.n_tasks
-mkdir_p(args['result_path'])
-train_set, val_set, test_set = split_dataset(args, dataset)
+    exp_config = get_configure2(args['model'], args['featurizer_type'], args['dataset'], path_orig)    
+    print(f'exp_config = {exp_config}')
+    dataset = load_dataset(args)                     
+    args['n_tasks'] = dataset.n_tasks
+    mkdir_p(args['result_path'])
+    train_set, val_set, test_set = split_dataset(args, dataset)
 
-# %% OVERVIEW
-df = train_set.dataset.df
-print(f'df = {df.shape}')
-print(f'n_tasks = {dataset.n_tasks}')
-for i in df.columns[:-1]:
-    arr = df[i].values
-    print(f'{i, np.unique(arr[~np.isnan(arr)]), np.sum(arr==1)}, imbalance={np.sum(arr==1)/(np.sum(arr==1)+np.sum(arr==0)):.5f}')
-molecules = [Chem.MolFromSmiles(smiles) for smiles in islice(train_set.dataset.smiles, 6)]
-df.head()
-Draw.MolsToGridImage(molecules)
+    #===== OVERVIEW
+    # df = train_set.dataset.df
+    # print(f'df = {df.shape}')
+    # print(f'n_tasks = {dataset.n_tasks}')
+    # for i in df.columns[:-1]:
+    #     arr = df[i].values
+    #     print(f'{i, np.unique(arr[~np.isnan(arr)]), np.sum(arr==1)}, imbalance={np.sum(arr==1)/(np.sum(arr==1)+np.sum(arr==0)):.5f}')
+    # molecules = [Chem.MolFromSmiles(smiles) for smiles in islice(train_set.dataset.smiles, 6)]
+    # df.head()
+    # Draw.MolsToGridImage(molecules)
 
-# %%
-exp_config = get_configure(args['model'], args['featurizer_type'], args['dataset'])
+    
+    main(args, exp_config, train_set, val_set, test_set)
 
-# %%
-main(args, exp_config, train_set, val_set, test_set)
+if __name__ == '__main__':
+    main_func()
 
-# %%
-model = load_model(exp_config)
-model
-
+    # # %%
+    # model = load_model(exp_config)
+    # model
 
 
-#%%
-train_loader_temp = DataLoader(dataset=train_set, batch_size=8, shuffle=True,
-                              collate_fn=collate_molgraphs, num_workers=args['num_workers'])
-batch_data = next(iter(train_loader_temp))
-smiles, bg, labels, masks = batch_data
 
-# %%
-from pprint import pprint
-pprint(vars(bg))
 
-#%%
-batch_data = next(iter(train_loader_temp))
-smiles, bg, labels, masks = batch_data
+    # train_loader_temp = DataLoader(dataset=train_set, batch_size=8, shuffle=True,
+    #                               collate_fn=collate_molgraphs, num_workers=args['num_workers'])
+    # batch_data = next(iter(train_loader_temp))
+    # smiles, bg, labels, masks = batch_data
 
-# %%
-import matplotlib.pyplot as plt
-print(bg.ndata.get('h').shape)
-plt.imshow(bg.ndata.get('h').numpy())
-# %%
+    # # %%
+    # from pprint import pprint
+    # pprint(vars(bg))
 
-# %%
+
+    # batch_data = next(iter(train_loader_temp))
+    # smiles, bg, labels, masks = batch_data
+
+    # # %%
+    # import matplotlib.pyplot as plt
+    # print(bg.ndata.get('h').shape)
+    # plt.imshow(bg.ndata.get('h').numpy())
+    # # %%
+
+    # # %%
