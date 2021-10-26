@@ -183,5 +183,5 @@ import matplotlib.pyplot as plt
 print(bg.ndata.get('h').shape)
 plt.imshow(bg.ndata.get('h').numpy())
 # %%
-
+print(bg.ndata.get('e'))
 # %%
